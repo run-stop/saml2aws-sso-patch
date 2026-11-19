@@ -5,16 +5,20 @@ throwaway incognito-style context, and stop Playwright passing flags that
 disable extensions. This lets Jamf/MDM-managed Chrome policies and
 force-installed extensions (e.g. Microsoft Single Sign On) work during login.
 
+Hardening: keep Chrome's OS sandbox enabled (Playwright defaults to
+--no-sandbox) and drop --use-mock-keychain / --password-store=basic so the
+persistent profile's cookies are encrypted with a Keychain-held key.
+
 Profile dir: ~/.aws/saml2aws/browser-profile-<browser-type>
 Override with: SAML2AWS_BROWSER_PROFILE_DIR
 
 Apply with:  git apply saml2aws-sso.patch   (or: patch -p1 < saml2aws-sso.patch)
 
 diff --git a/pkg/provider/browser/browser.go b/pkg/provider/browser/browser.go
-index 0681589..8fe1084 100644
+index 0681589..a4f29b8 100644
 --- a/pkg/provider/browser/browser.go
 +++ b/pkg/provider/browser/browser.go
-@@ -102,51 +102,61 @@ func (cl *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
+@@ -102,51 +102,68 @@ func (cl *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
  		launchOptions.ExecutablePath = &cl.BrowserExecutablePath
  	}
  
@@ -63,12 +67,19 @@ index 0681589..8fe1084 100644
 +		ExecutablePath: launchOptions.ExecutablePath,
 +	}
 +	if browserType == pw.Chromium {
++		// Keep Chrome's OS-level sandbox on (Playwright adds --no-sandbox by default).
++		persistentOptions.ChromiumSandbox = playwright.Bool(true)
 +		persistentOptions.IgnoreDefaultArgs = []string{
++			// allow managed / force-installed extensions
 +			"--disable-extensions",
 +			"--disable-component-extensions-with-background-pages",
++			"--disable-default-apps",
++			// allow policy extension installs, Safe Browsing and CRLSet updates
 +			"--disable-background-networking",
 +			"--disable-component-update",
-+			"--disable-default-apps",
++			// encrypt the persistent profile's cookies with a Keychain-held key
++			"--use-mock-keychain",
++			"--password-store=basic",
 +		}
 +	}
  

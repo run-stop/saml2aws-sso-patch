@@ -53,6 +53,14 @@ change.
 - Used with `--browser-type=chrome`, it opens your real Google Chrome. Chrome
   then picks up the MDM policy, installs the SSO extension into that
   profile, and keeps it there for later logins.
+- It hardens the browser, which stock saml2aws and Playwright don't do:
+  - It keeps Chrome's sandbox on. Playwright adds `--no-sandbox` by default.
+  - It stops Playwright passing `--use-mock-keychain` and
+    `--password-store=basic`, so the saved profile's cookies are encrypted
+    with a key held in the macOS Keychain instead of a fixed, publicly known
+    key.
+
+  See [Security considerations](#security-considerations).
 
 **Why it matters.**
 
@@ -68,6 +76,61 @@ change.
 cleaner fix for a whole fleet is AWS IAM Identity Center with Entra as the
 identity provider. `aws sso login` opens your normal browser, so the SSO
 extension works with no patching.
+
+## Security considerations
+
+The patch makes the login browser behave much more like normal, managed
+Chrome. That is mostly a security gain, but there are a few points to know.
+
+**Improvements over stock saml2aws**
+
+- **Up-to-date browser.** With `--browser-type=chrome` you use your installed
+  Chrome, which updates itself and is managed by IT. Stock saml2aws uses
+  Playwright's bundled Chromium, a 2024 build that never updates and has
+  known vulnerabilities.
+- **Sandbox on.** Playwright starts Chromium with `--no-sandbox` unless told
+  otherwise. Without the sandbox, a malicious page that exploits a browser
+  bug can reach your files and run code as you. The patch sets
+  `chromiumSandbox: true`.
+- **Keychain-protected cookies.** Playwright's `--use-mock-keychain` and
+  `--password-store=basic` make Chrome encrypt cookies with a fixed, publicly
+  known key. The patch removes both, so Chrome uses a key held in the macOS
+  Keychain. On first run macOS may ask once to allow Keychain access.
+- **Background security updates restored.** With
+  `--disable-background-networking` and `--disable-component-update` removed,
+  Chrome fetches Safe Browsing lists, the certificate revocation list
+  (CRLSet) and extension updates again.
+- **MDM security policies apply.** Extension blocklists, Safe Browsing
+  enforcement, download restrictions and similar policies now take effect.
+  Playwright's Chromium ignores them.
+- **Remote control stays local.** Playwright controls Chrome through a
+  private pipe (`--remote-debugging-pipe`), not a network port, so other apps
+  and other machines can't take over the browser.
+
+**Residual risks**
+
+- **Extensions run during login.** Any extension in the saml2aws profile can
+  see the login pages and the AWS sign-in response. Don't install
+  extensions into this profile by hand. Ideally, enforce an MDM extension
+  allowlist (`ExtensionInstallBlocklist: ["*"]` plus
+  `ExtensionInstallAllowlist` / `ExtensionInstallForcelist` for the SSO
+  extension).
+- **Login session kept on disk.** The profile at
+  `~/.aws/saml2aws/browser-profile-*` keeps Microsoft session cookies between
+  runs. It is readable only by your user account (`0700`) and encrypted via
+  the Keychain, the same as your everyday Chrome profile. Delete the folder
+  to sign out completely. Stock saml2aws already kept your session in
+  `~/.aws/saml2aws/storageState.json`, which you can delete.
+- **Automation defaults still active.** Playwright still turns off some
+  conveniences and protections, such as pop-up blocking and automatic HTTPS
+  upgrades. Use the window saml2aws opens only for signing in, not for
+  general browsing.
+- **Self-maintained fork.** You are responsible for re-applying the patch to
+  new saml2aws releases and for keeping the Playwright driver up to date.
+- **Bundled Chromium is still possible.** Running without
+  `--browser-type=chrome` falls back to Playwright's outdated Chromium. It
+  still gets the sandbox and Keychain fixes, but not Chrome updates or MDM
+  policies. Prefer `--browser-type=chrome` (or `msedge`).
 
 ## Building
 
