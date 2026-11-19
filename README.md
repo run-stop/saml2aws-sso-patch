@@ -9,6 +9,68 @@ This is an unofficial patch, not affiliated with or endorsed by
 [Versent/saml2aws](https://github.com/Versent/saml2aws). saml2aws and this
 patch are MIT-licensed; see `LICENSE.md`.
 
+## Why this exists
+
+**The goal.** You sign in to AWS through Microsoft Entra ID, which sends AWS
+a SAML sign-in response. saml2aws's `Browser` provider opens a browser
+window, lets you sign in to Microsoft, catches that response as it goes to
+AWS, and turns it into temporary AWS credentials.
+
+**Problem 1: the browser driver download is broken.** saml2aws controls the
+browser through Playwright, a browser automation library. On first use it
+downloads Playwright's driver from `playwright.azureedge.net`. Microsoft has
+shut that server down, so the download fails with a 404 error. Newer
+saml2aws versions have the same bug, so updating doesn't help. Step 5 below
+installs the driver by hand, using Node.js and the `playwright-core` package
+from their official sources.
+
+**Problem 2: no SSO extension in the browser.** On Jamf/MDM-managed Macs,
+the Microsoft Single Sign On extension is pushed to Chrome through a
+configuration profile. The browser saml2aws opens can't use it, for three
+reasons:
+
+1. **Wrong browser.** By default saml2aws opens Playwright's own Chromium, a
+   separate app that Chrome's managed settings don't cover.
+2. **Extensions switched off.** Playwright starts every browser with
+   `--disable-extensions`, which applies even to real Chrome.
+3. **Throwaway profile.** saml2aws opens each login in a fresh,
+   private-style session with no saved profile, where extensions don't run.
+
+saml2aws has no setting to change points 2 and 3, so the source code has to
+change.
+
+**What the patch does.**
+
+- It opens the browser with a saved profile on disk
+  (`~/.aws/saml2aws/browser-profile-<browser-type>`) instead of a throwaway
+  session.
+- It stops Playwright passing the flags that disable extensions or block
+  Chrome from downloading the extensions your policy installs:
+  `--disable-extensions`,
+  `--disable-component-extensions-with-background-pages`,
+  `--disable-background-networking`, `--disable-component-update` and
+  `--disable-default-apps`.
+- Used with `--browser-type=chrome`, it opens your real Google Chrome. Chrome
+  then picks up the MDM policy, installs the SSO extension into that
+  profile, and keeps it there for later logins.
+
+**Why it matters.**
+
+- Sign-in can use the Mac's Entra device registration and SSO, which is
+  usually what Conditional Access rules check for, such as "compliant device
+  only".
+- The usual alternatives, typing a password or using saml2aws's non-browser
+  `AzureAD` provider, can't prove the device is managed and may be blocked.
+- Logins also get quicker, because the saved profile keeps your session
+  between runs.
+
+**Long-term.** This is a workaround you'd have to maintain yourself. A
+cleaner fix for a whole fleet is AWS IAM Identity Center with Entra as the
+identity provider. `aws sso login` opens your normal browser, so the SSO
+extension works with no patching.
+
+## Building
+
 Prerequisites: `git`, `curl`, and the Xcode Command Line Tools (`xcode-select --install`).
 The build uses cgo, so it needs the C compiler from those tools.
 
