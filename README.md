@@ -246,3 +246,16 @@ Quit Chrome first, then run:
   point it at your everyday Chrome profile while Chrome is running.
 - The "Chrome is being controlled by automated test software" banner is
   expected.
+
+## Troubleshooting
+
+**`saml2aws login` prints nothing and no browser opens.** You most likely
+still have valid AWS credentials from an earlier login. saml2aws reuses
+credentials that haven't expired and skips the browser; the message saying
+so only appears with `--verbose`. To force a fresh browser login:
+
+```sh
+./saml2aws login --force --browser-type=chrome
+```
+
+Add `--verbose` to any command to see what saml2aws is doing.
