@@ -1,0 +1,105 @@
+saml2aws v2.36.19 - Browser provider: allow MDM-managed extensions (SSO)
+
+Launch the Playwright browser with a persistent profile instead of a
+throwaway incognito-style context, and stop Playwright passing flags that
+disable extensions. This lets Jamf/MDM-managed Chrome policies and
+force-installed extensions (e.g. Microsoft Single Sign On) work during login.
+
+Profile dir: ~/.aws/saml2aws/browser-profile-<browser-type>
+Override with: SAML2AWS_BROWSER_PROFILE_DIR
+
+Apply with:  git apply saml2aws-sso.patch   (or: patch -p1 < saml2aws-sso.patch)
+
+diff --git a/pkg/provider/browser/browser.go b/pkg/provider/browser/browser.go
+index 0681589..8fe1084 100644
+--- a/pkg/provider/browser/browser.go
++++ b/pkg/provider/browser/browser.go
+@@ -102,51 +102,61 @@ func (cl *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
+ 		launchOptions.ExecutablePath = &cl.BrowserExecutablePath
+ 	}
+ 
+-	// currently using the main browsers supported by Playwright: Chromium, Firefox or Webkit
+-	//
+-	// this is a sandboxed browser window so password managers and addons are separate
+-	browser, err := browserType.Launch(launchOptions)
+-	if err != nil {
+-		return "", err
+-	}
+-
+-	// create Context Optionsf
+-	contextOptions := playwright.BrowserNewContextOptions{}
+-
+-	// load saved storageState if present and add to contextOptions
++	// PATCHED: launch with a persistent profile and without the Playwright flags that
++	// disable extensions, so MDM-managed (e.g. Jamf) policies and force-installed
++	// extensions such as the Microsoft Single Sign On extension are active.
+ 	userHomeDir, err := os.UserHomeDir()
+-	storageStatePath := fmt.Sprintf("%s/.aws/saml2aws/storageState.json", userHomeDir)
+ 	if err != nil {
+ 		return "", err
+ 	}
+-	if _, err := os.Stat(storageStatePath); err == nil {
+-		contextOptions.StorageStatePath = playwright.String(storageStatePath)
++	profileDir := os.Getenv("SAML2AWS_BROWSER_PROFILE_DIR")
++	if profileDir == "" {
++		name := cl.BrowserType
++		if name == "" {
++			name = "chromium"
++		}
++		profileDir = fmt.Sprintf("%s/.aws/saml2aws/browser-profile-%s", userHomeDir, name)
+ 	}
+-
+-	// Create new broswer context
+-	context, err := browser.NewContext(contextOptions)
+-	if err != nil {
++	if err := os.MkdirAll(profileDir, 0700); err != nil {
+ 		return "", err
+ 	}
++	logger.Info(fmt.Sprintf("Using persistent browser profile: %s", profileDir))
++
++	persistentOptions := playwright.BrowserTypeLaunchPersistentContextOptions{
++		Headless:       launchOptions.Headless,
++		Channel:        launchOptions.Channel,
++		ExecutablePath: launchOptions.ExecutablePath,
++	}
++	if browserType == pw.Chromium {
++		persistentOptions.IgnoreDefaultArgs = []string{
++			"--disable-extensions",
++			"--disable-component-extensions-with-background-pages",
++			"--disable-background-networking",
++			"--disable-component-update",
++			"--disable-default-apps",
++		}
++	}
+ 
+-	page, err := context.NewPage()
++	context, err := browserType.LaunchPersistentContext(profileDir, persistentOptions)
+ 	if err != nil {
+ 		return "", err
+ 	}
+ 
+-	defer func() {
+-		logger.Info("saving storage state")
+-		_, err := context.StorageState(storageStatePath)
++	var page playwright.Page
++	if pages := context.Pages(); len(pages) > 0 {
++		page = pages[0]
++	} else {
++		page, err = context.NewPage()
+ 		if err != nil {
+-			logger.Info("Error saving storage state", err)
++			return "", err
+ 		}
++	}
++
++	defer func() {
+ 		logger.Info("clean up browser")
+ 		if err := context.Close(); err != nil {
+ 			logger.Info("Error when closing context", err)
+ 		}
+-		if err := browser.Close(); err != nil {
+-			logger.Info("Error when closing browser", err)
+-		}
+ 		if err := pw.Stop(); err != nil {
+ 			logger.Info("Error when stopping pm", err)
+ 		}
